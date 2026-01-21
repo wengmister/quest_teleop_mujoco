@@ -55,7 +55,7 @@ def main() -> None:
     parser.add_argument(
         "--position-scale",
         type=float,
-        default=2.5,
+        default=1.5,
         help="Scale for wrist position residuals.",
     )
     parser.add_argument(
