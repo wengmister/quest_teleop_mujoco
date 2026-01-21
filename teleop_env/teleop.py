@@ -55,13 +55,13 @@ def main() -> None:
     parser.add_argument(
         "--position-scale",
         type=float,
-        default=1.0,
+        default=1.5,
         help="Scale for wrist position residuals.",
     )
     parser.add_argument(
         "--ema-alpha",
         type=float,
-        default=0.2,
+        default=0.5,
         help="EMA smoothing factor for wrist residuals (0-1).",
     )
     parser.add_argument(
@@ -94,6 +94,12 @@ def main() -> None:
         gripper_actuator_id = mujoco.mj_name2id(
             model, mujoco.mjtObj.mjOBJ_ACTUATOR, "gripper"
         )
+    gripper_joint_ids = [
+        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "piper_joint7"),
+        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "piper_joint8"),
+        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "joint7"),
+        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "joint8"),
+    ]
 
     mujoco.mj_forward(model, data)
     initial_site_pos = data.site_xpos[site_id].copy()
@@ -215,10 +221,18 @@ def main() -> None:
                 rot_weight=args.rot_weight,
                 damping = 1e-2,
             )
-            data.qpos[: model.nq] = q_sol
-            n_ctrl = min(model.nu, q_sol.shape[0])
-            if n_ctrl:
-                data.ctrl[:n_ctrl] = q_sol[:n_ctrl]
+            if model.nu:
+                ctrl = data.ctrl.copy()
+                for act_id in range(model.nu):
+                    joint_id = model.actuator_trnid[act_id, 0]
+                    if joint_id in gripper_joint_ids:
+                        continue
+                    if joint_id < 0:
+                        continue
+                    qadr = model.jnt_qposadr[joint_id]
+                    if qadr < q_sol.shape[0]:
+                        ctrl[act_id] = q_sol[qadr]
+                data.ctrl[:] = ctrl
             if latest_gripper_cmd is not None and gripper_actuator_id != -1:
                 data.ctrl[gripper_actuator_id] = latest_gripper_cmd
             mujoco.mj_step(model, data)
