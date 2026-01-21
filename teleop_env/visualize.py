@@ -8,16 +8,12 @@ import mujoco
 from mujoco import viewer
 
 
-def _default_scene_path() -> Path:
-    return Path(__file__).resolve().parent / "scene" / "scene_piper.xml"
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Visualize a MuJoCo scene.")
     parser.add_argument(
         "scene",
         nargs="?",
-        default=str(_default_scene_path()),
+        default=str("teleop_env/scene/scene_piper.xml"),
         help="Path to a MuJoCo XML scene file.",
     )
     args = parser.parse_args()
