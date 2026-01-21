@@ -17,7 +17,12 @@ from util.quaternion import (
     quaternion_to_euler_xyz,
     transform_vr_to_robot_pose,
 )
-from util.udp_socket import parse_right_wrist_pose
+from util.udp_socket import (
+    parse_right_landmarks,
+    parse_right_wrist_pose,
+    pinch_distance_from_landmarks,
+    pinch_to_gripper,
+)
 
 
 def _default_scene_path() -> Path:
@@ -82,6 +87,14 @@ def main() -> None:
     if site_id == -1:
         raise ValueError(f"Site '{args.site}' not found in model.")
 
+    gripper_actuator_id = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_ACTUATOR, "piper_gripper"
+    )
+    if gripper_actuator_id == -1:
+        gripper_actuator_id = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_ACTUATOR, "gripper"
+        )
+
     mujoco.mj_forward(model, data)
     initial_site_pos = data.site_xpos[site_id].copy()
     initial_site_quat = matrix_to_quaternion(
@@ -107,6 +120,7 @@ def main() -> None:
     latest_residual = None
     latest_euler_residual = None
     smoothed_residual = None
+    latest_gripper_cmd = None
 
     with viewer.launch_passive(model, data) as vis:
         while vis.is_running():
@@ -117,6 +131,11 @@ def main() -> None:
 
             if packet is not None:
                 message = packet.decode("utf-8", errors="ignore")
+                landmarks = parse_right_landmarks(message)
+                if landmarks is not None and gripper_actuator_id != -1:
+                    pinch_distance = pinch_distance_from_landmarks(landmarks)
+                    if pinch_distance is not None:
+                        latest_gripper_cmd = pinch_to_gripper(pinch_distance)
                 wrist_pose = parse_right_wrist_pose(message)
                 if wrist_pose is not None:
                     wrist_position = (wrist_pose[0], wrist_pose[1], wrist_pose[2])
@@ -200,6 +219,8 @@ def main() -> None:
             n_ctrl = min(model.nu, q_sol.shape[0])
             if n_ctrl:
                 data.ctrl[:n_ctrl] = q_sol[:n_ctrl]
+            if latest_gripper_cmd is not None and gripper_actuator_id != -1:
+                data.ctrl[gripper_actuator_id] = latest_gripper_cmd
             mujoco.mj_step(model, data)
             vis.sync()
 

@@ -1,3 +1,4 @@
+import math
 import socket
 import sys
 from typing import Optional, Sequence
@@ -26,6 +27,49 @@ def parse_right_wrist_pose(message: str) -> Optional[Sequence[float]]:
                 return values
         return None
     return None
+
+
+def parse_right_landmarks(message: str) -> Optional[Sequence[float]]:
+    for line in message.splitlines():
+        if not line.strip().lower().startswith("right landmarks"):
+            continue
+        _, _, rest = line.partition(":")
+        parts = [p.strip() for p in rest.split(",") if p.strip()]
+        values = []
+        for part in parts:
+            try:
+                values.append(float(part))
+            except ValueError:
+                break
+            if len(values) == 63:
+                return values
+        return None
+    return None
+
+
+def pinch_distance_from_landmarks(
+    landmarks: Sequence[float], thumb_tip_index: int = 4, index_tip_index: int = 8
+) -> Optional[float]:
+    if len(landmarks) < 63:
+        return None
+    thumb_offset = thumb_tip_index * 3
+    index_offset = index_tip_index * 3
+    if index_offset + 2 >= len(landmarks):
+        return None
+    thumb = landmarks[thumb_offset : thumb_offset + 3]
+    index_tip = landmarks[index_offset : index_offset + 3]
+    dx = thumb[0] - index_tip[0]
+    dy = thumb[1] - index_tip[1]
+    dz = thumb[2] - index_tip[2]
+    return math.sqrt(dx * dx + dy * dy + dz * dz)
+
+
+def pinch_to_gripper(pinch_distance: float, max_distance: float = 0.1) -> float:
+    if max_distance <= 0:
+        return 0.0
+    scaled = pinch_distance / max_distance
+    clamped = min(1.0, max(0.0, scaled))
+    return 0.035 * clamped
 
 
 def create_udp_listener(port=9000):
@@ -77,7 +121,17 @@ def create_udp_listener(port=9000):
                 relative_quaternion[2],
                 relative_quaternion[3],
             )
-            print(f"Wrist residual (xyz): {residual} euler: {euler_residual}")
+            landmarks = parse_right_landmarks(message)
+            pinch_distance = None
+            gripper = None
+            if landmarks is not None:
+                pinch_distance = pinch_distance_from_landmarks(landmarks)
+                if pinch_distance is not None:
+                    gripper = pinch_to_gripper(pinch_distance)
+            print(
+                # f"Wrist residual (xyz): {residual} euler: {euler_residual} "
+                f"pinch: {pinch_distance} gripper: {gripper}"
+            )
     
     except KeyboardInterrupt:
         print("\nShutting down...")
