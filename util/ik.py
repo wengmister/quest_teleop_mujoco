@@ -51,6 +51,7 @@ def solve_pose_ik(
         [0.0, 0.9, -0.9, 0.0, 0.4, 0.0, 0.0, 0.0], dtype=np.float64
     ),
     home_weight: float = 0.01,
+    current_q_weight: float = 0.0,
     skip_tail_joints: int = 2,
     damping: float = 1e-3,
 ) -> np.ndarray:
@@ -124,6 +125,27 @@ def solve_pose_ik(
 
             err = np.hstack([err, err_home])
             jac = np.vstack([jac, jac_home])
+
+        if current_q_weight > 0.0:
+            # Penalize deviation from the INITIAL q for this step (not the current iteration's q)
+            # This requires us to use q_init which is passed in.
+            # However, q_init might be full size, we only care about robot part.
+            q_initial_robot = q_init[:n_robot]
+            
+            scale = math.sqrt(current_q_weight)
+            err_curr = scale * (q_initial_robot - q[:n_robot])
+            
+            jac_curr = np.zeros((n_robot, model.nv))
+            np.fill_diagonal(jac_curr[:n_robot, :n_robot], scale)
+            
+            if skip_tail_joints:
+                start_skip = max(0, n_robot - skip_tail_joints)
+                err_curr[start_skip:] = 0.0
+                jac_curr[start_skip:, :] = 0.0
+                jac_curr[:, start_skip:n_robot] = 0.0
+
+            err = np.hstack([err, err_curr])
+            jac = np.vstack([jac, jac_curr])
 
         JJ = jac @ jac.T + damping * np.eye(jac.shape[0])
         dq = jac.T @ np.linalg.solve(JJ, err)

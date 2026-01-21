@@ -55,7 +55,7 @@ def main() -> None:
     parser.add_argument(
         "--position-scale",
         type=float,
-        default=2.0,
+        default=2.5,
         help="Scale for wrist position residuals.",
     )
     parser.add_argument(
@@ -69,6 +69,18 @@ def main() -> None:
         type=float,
         default=1.0,
         help="Weight for orientation error in IK.",
+    )
+    parser.add_argument(
+        "--ik-damping",
+        type=float,
+        default=1e-3,
+        help="Damping factor for IK solver.",
+    )
+    parser.add_argument(
+        "--ik-current-weight",
+        type=float,
+        default=0.1,
+        help="Weight for penalizing deviation from current pose in IK.",
     )
     args = parser.parse_args()
 
@@ -219,7 +231,8 @@ def main() -> None:
                 target_quaternion,
                 data.qpos[: model.nq],
                 rot_weight=args.rot_weight,
-                damping = 1e-3,
+                damping=args.ik_damping,
+                current_q_weight=args.ik_current_weight,
             )
             if model.nu:
                 ctrl = data.ctrl.copy()
