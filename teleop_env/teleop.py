@@ -194,6 +194,7 @@ def main() -> None:
                 target_quaternion,
                 data.qpos[: model.nq],
                 rot_weight=args.rot_weight,
+                damping = 1e-2,
             )
             data.qpos[: model.nq] = q_sol
             n_ctrl = min(model.nu, q_sol.shape[0])
