@@ -55,13 +55,13 @@ def main() -> None:
     parser.add_argument(
         "--position-scale",
         type=float,
-        default=1.5,
+        default=2.0,
         help="Scale for wrist position residuals.",
     )
     parser.add_argument(
         "--ema-alpha",
         type=float,
-        default=0.5,
+        default=0.8,
         help="EMA smoothing factor for wrist residuals (0-1).",
     )
     parser.add_argument(
@@ -219,7 +219,7 @@ def main() -> None:
                 target_quaternion,
                 data.qpos[: model.nq],
                 rot_weight=args.rot_weight,
-                damping = 1e-2,
+                damping = 1e-3,
             )
             if model.nu:
                 ctrl = data.ctrl.copy()

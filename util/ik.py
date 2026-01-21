@@ -57,6 +57,21 @@ def solve_pose_ik(
     """Levenberg-Marquardt IK for a site pose (position + orientation)."""
     q = np.asarray(q_init, dtype=np.float64).copy()
     target_rot = np.asarray(quaternion_to_matrix(target_quat), dtype=np.float64)
+
+    # Heuristic: assume home_qpos defines the active robot joints.
+    # Everything else (e.g. free joints for objects) is ignored.
+    n_robot = 0
+    if home_qpos is not None:
+        n_robot = len(home_qpos)
+
+    # Sanity check: if n_robot > model.nq, something is wrong, clamp it.
+    if n_robot > model.nq:
+        n_robot = model.nq
+    
+    # If home_qpos is not provided or empty, default to full state (not recommended with free extra objects)
+    if n_robot == 0:
+        n_robot = model.nq
+
     for _ in range(max_iters):
         workspace.qpos[: model.nq] = q
         workspace.qvel[:] = 0.0
@@ -74,23 +89,51 @@ def solve_pose_ik(
         jacr = np.zeros((3, model.nv))
         mujoco.mj_jacSite(model, workspace, jacp, jacr, site_id)
         jac = np.vstack([jacp, rot_weight * jacr])
+
+        # Zero out non-robot columns (e.g. cube free joint)
+        # Note: We assume robot joints are contiguous at the start and correspond 1:1 with nv indices
+        # This is true for hinge/slide joints which Piper uses.
+        if n_robot < model.nv:
+            jac[:, n_robot:] = 0.0
+
         if skip_tail_joints:
-            jac[:, -skip_tail_joints:] = 0.0
+            # Skip the last few joints of the ROBOT (e.g. gripper fingers)
+            # Ensure we don't go negative
+            start_skip = max(0, n_robot - skip_tail_joints)
+            jac[:, start_skip:n_robot] = 0.0
+
         if home_weight > 0.0 and home_qpos is not None:
-            home = np.asarray(home_qpos, dtype=np.float64)[: model.nq]
+             # Only penalize deviation for robot joints
+            home = np.asarray(home_qpos, dtype=np.float64)
             scale = math.sqrt(home_weight)
-            err_home = scale * (home - q[: model.nq])
-            jac_home = scale * np.eye(model.nv)
+            # Deviation only for the n_robot joints
+            err_home = scale * (home - q[:n_robot])
+            
+            # Jacobian for home term
+            # We extend jac to include n_robot rows
+            jac_home = np.zeros((n_robot, model.nv))
+            # Set diagonal for the robot part
+            np.fill_diagonal(jac_home[:n_robot, :n_robot], scale)
+            
             if skip_tail_joints:
-                err_home[-skip_tail_joints:] = 0.0
-                jac_home[:, -skip_tail_joints:] = 0.0
+                start_skip = max(0, n_robot - skip_tail_joints)
+                err_home[start_skip:] = 0.0
+                jac_home[start_skip:, :] = 0.0 # Zero out rows for skipped joints
+                # Note: columns are also effectively handled by identity structure but let's be safe
+                jac_home[:, start_skip:n_robot] = 0.0
+
             err = np.hstack([err, err_home])
             jac = np.vstack([jac, jac_home])
+
         JJ = jac @ jac.T + damping * np.eye(jac.shape[0])
         dq = jac.T @ np.linalg.solve(JJ, err)
-        if skip_tail_joints:
-            dq[-skip_tail_joints:] = 0.0
-        q += dq
+        
+        # Zero out non-robot dq again to be safe
+        if n_robot < model.nv:
+            dq[n_robot:] = 0.0
+        
+        # Update q using integratePos to handle free joints correctly (even if we don't move them)
+        mujoco.mj_integratePos(model, q, dq, 1.0)
     return q
 
 
