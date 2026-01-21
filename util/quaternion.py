@@ -107,7 +107,7 @@ def transform_vr_to_robot_pose(
     transform = (
         (0.0, 0.0, 1.0),
         (-1.0, 0.0, 0.0),
-        (0.0, 1.0, 0.0),
+        (0.0, -1.0, 0.0),
     )
     vr_matrix = quaternion_to_matrix(quaternion)
     tmp = (

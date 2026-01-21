@@ -9,8 +9,9 @@ import mujoco
 import numpy as np
 from mujoco import viewer
 
-from util.ik import solve_position_ik
+from util.ik import solve_pose_ik
 from util.quaternion import (
+    matrix_to_quaternion,
     quaternion_inverse,
     quaternion_multiply,
     quaternion_to_euler_xyz,
@@ -58,6 +59,12 @@ def main() -> None:
         default=0.2,
         help="EMA smoothing factor for wrist residuals (0-1).",
     )
+    parser.add_argument(
+        "--rot-weight",
+        type=float,
+        default=1.0,
+        help="Weight for orientation error in IK.",
+    )
     args = parser.parse_args()
 
     xml_path = Path(args.scene).expanduser().resolve()
@@ -77,6 +84,9 @@ def main() -> None:
 
     mujoco.mj_forward(model, data)
     initial_site_pos = data.site_xpos[site_id].copy()
+    initial_site_quat = matrix_to_quaternion(
+        data.site_xmat[site_id].reshape(3, 3).copy()
+    )
     base_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "piper_base_link")
     if base_body_id == -1:
         base_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "base_link")
@@ -92,6 +102,7 @@ def main() -> None:
     initial_wrist_position = None
     initial_wrist_quaternion = None
     target_position = initial_site_pos.copy()
+    target_quaternion = np.array(initial_site_quat, dtype=np.float64)
     last_log_time = time.time()
     latest_residual = None
     latest_euler_residual = None
@@ -147,6 +158,13 @@ def main() -> None:
                             robot_quaternion,
                             quaternion_inverse(initial_wrist_quaternion),
                         )
+                        target_quaternion = np.array(
+                            quaternion_multiply(relative_quaternion, initial_site_quat),
+                            dtype=np.float64,
+                        )
+                        norm = np.linalg.norm(target_quaternion)
+                        if norm > 0.0:
+                            target_quaternion /= norm
                         euler_residual = quaternion_to_euler_xyz(
                             relative_quaternion[0],
                             relative_quaternion[1],
@@ -168,8 +186,14 @@ def main() -> None:
                 )
                 last_log_time = now
 
-            q_sol = solve_position_ik(
-                model, ik_data, site_id, target_position, data.qpos[: model.nq]
+            q_sol = solve_pose_ik(
+                model,
+                ik_data,
+                site_id,
+                target_position,
+                target_quaternion,
+                data.qpos[: model.nq],
+                rot_weight=args.rot_weight,
             )
             data.qpos[: model.nq] = q_sol
             n_ctrl = min(model.nu, q_sol.shape[0])
