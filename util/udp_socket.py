@@ -11,9 +11,10 @@ from util.quaternion import (
 )
 
 
-def parse_right_wrist_pose(message: str) -> Optional[Sequence[float]]:
+def _parse_pose(message: str, prefix: str) -> Optional[Sequence[float]]:
+    prefix = prefix.lower()
     for line in message.splitlines():
-        if not line.strip().lower().startswith("right wrist"):
+        if not line.strip().lower().startswith(prefix):
             continue
         _, _, rest = line.partition(":")
         parts = [p.strip() for p in rest.split(",") if p.strip()]
@@ -23,28 +24,43 @@ def parse_right_wrist_pose(message: str) -> Optional[Sequence[float]]:
                 values.append(float(part))
             except ValueError:
                 break
-            if len(values) == 7:
-                return values
-        return None
+        if len(values) == 7:
+            return values
     return None
+
+
+def _parse_landmarks(message: str, prefix: str) -> Optional[Sequence[float]]:
+    prefix = prefix.lower()
+    for line in message.splitlines():
+        if not line.strip().lower().startswith(prefix):
+            continue
+        _, _, rest = line.partition(":")
+        parts = [p.strip() for p in rest.split(",") if p.strip()]
+        values = []
+        for part in parts:
+            try:
+                values.append(float(part))
+            except ValueError:
+                break
+        if len(values) == 63:
+            return values
+    return None
+
+
+def parse_right_wrist_pose(message: str) -> Optional[Sequence[float]]:
+    return _parse_pose(message, "right wrist")
+
+
+def parse_left_wrist_pose(message: str) -> Optional[Sequence[float]]:
+    return _parse_pose(message, "left wrist")
 
 
 def parse_right_landmarks(message: str) -> Optional[Sequence[float]]:
-    for line in message.splitlines():
-        if not line.strip().lower().startswith("right landmarks"):
-            continue
-        _, _, rest = line.partition(":")
-        parts = [p.strip() for p in rest.split(",") if p.strip()]
-        values = []
-        for part in parts:
-            try:
-                values.append(float(part))
-            except ValueError:
-                break
-            if len(values) == 63:
-                return values
-        return None
-    return None
+    return _parse_landmarks(message, "right landmarks")
+
+
+def parse_left_landmarks(message: str) -> Optional[Sequence[float]]:
+    return _parse_landmarks(message, "left landmarks")
 
 
 def pinch_distance_from_landmarks(

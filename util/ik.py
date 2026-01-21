@@ -54,6 +54,7 @@ def solve_pose_ik(
     current_q_weight: float = 0.0,
     skip_tail_joints: int = 2,
     damping: float = 1e-3,
+    dof_indices: np.ndarray | None = None,
 ) -> np.ndarray:
     """Levenberg-Marquardt IK for a site pose (position + orientation)."""
     q = np.asarray(q_init, dtype=np.float64).copy()
@@ -91,67 +92,100 @@ def solve_pose_ik(
         mujoco.mj_jacSite(model, workspace, jacp, jacr, site_id)
         jac = np.vstack([jacp, rot_weight * jacr])
 
-        # Zero out non-robot columns (e.g. cube free joint)
-        # Note: We assume robot joints are contiguous at the start and correspond 1:1 with nv indices
-        # This is true for hinge/slide joints which Piper uses.
-        if n_robot < model.nv:
-            jac[:, n_robot:] = 0.0
+        if dof_indices is not None:
+             # Zero out columns NOT in dof_indices
+            mask = np.ones(model.nv, dtype=bool)
+            mask[dof_indices] = False
+            jac[:, mask] = 0.0
+        else:
+            # Zero out non-robot columns (e.g. cube free joint)
+            if n_robot < model.nv:
+                jac[:, n_robot:] = 0.0
 
-        if skip_tail_joints:
-            # Skip the last few joints of the ROBOT (e.g. gripper fingers)
-            # Ensure we don't go negative
-            start_skip = max(0, n_robot - skip_tail_joints)
-            jac[:, start_skip:n_robot] = 0.0
+            if skip_tail_joints:
+                # Skip the last few joints of the ROBOT (e.g. gripper fingers)
+                # Ensure we don't go negative
+                start_skip = max(0, n_robot - skip_tail_joints)
+                jac[:, start_skip:n_robot] = 0.0
 
         if home_weight > 0.0 and home_qpos is not None:
              # Only penalize deviation for robot joints
             home = np.asarray(home_qpos, dtype=np.float64)
             scale = math.sqrt(home_weight)
-            # Deviation only for the n_robot joints
-            err_home = scale * (home - q[:n_robot])
             
             # Jacobian for home term
-            # We extend jac to include n_robot rows
-            jac_home = np.zeros((n_robot, model.nv))
-            # Set diagonal for the robot part
-            np.fill_diagonal(jac_home[:n_robot, :n_robot], scale)
+            # We extend jac to include n_robot rows (or dof_indices rows)
             
-            if skip_tail_joints:
-                start_skip = max(0, n_robot - skip_tail_joints)
-                err_home[start_skip:] = 0.0
-                jac_home[start_skip:, :] = 0.0 # Zero out rows for skipped joints
-                # Note: columns are also effectively handled by identity structure but let's be safe
-                jac_home[:, start_skip:n_robot] = 0.0
+            if dof_indices is not None:
+                # If dof_indices provided, home_qpos must match the size of dof_indices?
+                # Or we assume home_qpos is full size and we only pick dof_indices?
+                # For safety, let's assume if dof_indices is used, home_qpos should optionally be full
+                # or aligned. But to be safe let's assume home_qpos might not match.
+                # Ideally caller passes a relevant home_qpos slice.
+                # Let's assume home_qpos CORRESPONDS to the active joints if dof_indices is None.
+                # If dof_indices IS provided, handling home_qpos is tricky if lengths differ.
+                # Let's ignore home_weight if dof_indices is set UNLESS implemented carefully.
+                # Implementing: Assume home_qpos matches q[dof_indices]
+                if len(home) == len(dof_indices):
+                     err_home = scale * (home - q[dof_indices])
+                     jac_home = np.zeros((len(dof_indices), model.nv))
+                     for i, dof_idx in enumerate(dof_indices):
+                         jac_home[i, dof_idx] = scale
+                     
+                     err = np.hstack([err, err_home])
+                     jac = np.vstack([jac, jac_home])
+            else:
+                # Deviation only for the n_robot joints
+                err_home = scale * (home - q[:n_robot])
+                jac_home = np.zeros((n_robot, model.nv))
+                np.fill_diagonal(jac_home[:n_robot, :n_robot], scale)
+                
+                if skip_tail_joints:
+                    start_skip = max(0, n_robot - skip_tail_joints)
+                    err_home[start_skip:] = 0.0
+                    jac_home[start_skip:, :] = 0.0
+                    jac_home[:, start_skip:n_robot] = 0.0
 
-            err = np.hstack([err, err_home])
-            jac = np.vstack([jac, jac_home])
+                err = np.hstack([err, err_home])
+                jac = np.vstack([jac, jac_home])
 
         if current_q_weight > 0.0:
-            # Penalize deviation from the INITIAL q for this step (not the current iteration's q)
-            # This requires us to use q_init which is passed in.
-            # However, q_init might be full size, we only care about robot part.
-            q_initial_robot = q_init[:n_robot]
-            
             scale = math.sqrt(current_q_weight)
-            err_curr = scale * (q_initial_robot - q[:n_robot])
             
-            jac_curr = np.zeros((n_robot, model.nv))
-            np.fill_diagonal(jac_curr[:n_robot, :n_robot], scale)
-            
-            if skip_tail_joints:
-                start_skip = max(0, n_robot - skip_tail_joints)
-                err_curr[start_skip:] = 0.0
-                jac_curr[start_skip:, :] = 0.0
-                jac_curr[:, start_skip:n_robot] = 0.0
+            if dof_indices is not None:
+                err_curr = scale * (q_init[dof_indices] - q[dof_indices])
+                jac_curr = np.zeros((len(dof_indices), model.nv))
+                for i, dof_idx in enumerate(dof_indices):
+                    jac_curr[i, dof_idx] = scale
+                
+                err = np.hstack([err, err_curr])
+                jac = np.vstack([jac, jac_curr])
+            else:
+                # Penalize deviation from the INITIAL q for this step (not the current iteration's q)
+                # This requires us to use q_init which is passed in.
+                # However, q_init might be full size, we only care about robot part.
+                q_initial_robot = q_init[:n_robot]
+                err_curr = scale * (q_initial_robot - q[:n_robot])
+                
+                jac_curr = np.zeros((n_robot, model.nv))
+                np.fill_diagonal(jac_curr[:n_robot, :n_robot], scale)
+                
+                if skip_tail_joints:
+                    start_skip = max(0, n_robot - skip_tail_joints)
+                    err_curr[start_skip:] = 0.0
+                    jac_curr[start_skip:, :] = 0.0
+                    jac_curr[:, start_skip:n_robot] = 0.0
 
-            err = np.hstack([err, err_curr])
-            jac = np.vstack([jac, jac_curr])
+                err = np.hstack([err, err_curr])
+                jac = np.vstack([jac, jac_curr])
 
         JJ = jac @ jac.T + damping * np.eye(jac.shape[0])
         dq = jac.T @ np.linalg.solve(JJ, err)
         
         # Zero out non-robot dq again to be safe
-        if n_robot < model.nv:
+        if dof_indices is not None:
+             dq[mask] = 0.0
+        elif n_robot < model.nv:
             dq[n_robot:] = 0.0
         
         # Update q using integratePos to handle free joints correctly (even if we don't move them)
