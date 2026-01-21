@@ -1,5 +1,7 @@
 """Inverse-kinematics helpers for MuJoCo models."""
 
+import math
+
 import mujoco
 import numpy as np
 
@@ -45,6 +47,11 @@ def solve_pose_ik(
     max_iters: int = 30,
     tol: float = 1e-4,
     rot_weight: float = 1.0,
+    home_qpos: np.ndarray | None = np.array(
+        [0.0, 0.9, -0.9, 0.0, 0.4, 0.0, 0.0, 0.0], dtype=np.float64
+    ),
+    home_weight: float = 0.01,
+    skip_tail_joints: int = 2,
     damping: float = 1e-3,
 ) -> np.ndarray:
     """Levenberg-Marquardt IK for a site pose (position + orientation)."""
@@ -67,8 +74,22 @@ def solve_pose_ik(
         jacr = np.zeros((3, model.nv))
         mujoco.mj_jacSite(model, workspace, jacp, jacr, site_id)
         jac = np.vstack([jacp, rot_weight * jacr])
-        JJ = jac @ jac.T + damping * np.eye(6)
+        if skip_tail_joints:
+            jac[:, -skip_tail_joints:] = 0.0
+        if home_weight > 0.0 and home_qpos is not None:
+            home = np.asarray(home_qpos, dtype=np.float64)[: model.nq]
+            scale = math.sqrt(home_weight)
+            err_home = scale * (home - q[: model.nq])
+            jac_home = scale * np.eye(model.nv)
+            if skip_tail_joints:
+                err_home[-skip_tail_joints:] = 0.0
+                jac_home[:, -skip_tail_joints:] = 0.0
+            err = np.hstack([err, err_home])
+            jac = np.vstack([jac, jac_home])
+        JJ = jac @ jac.T + damping * np.eye(jac.shape[0])
         dq = jac.T @ np.linalg.solve(JJ, err)
+        if skip_tail_joints:
+            dq[-skip_tail_joints:] = 0.0
         q += dq
     return q
 
