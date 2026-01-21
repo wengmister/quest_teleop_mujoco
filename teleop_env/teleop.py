@@ -52,6 +52,12 @@ def main() -> None:
         default=1.0,
         help="Scale for wrist position residuals.",
     )
+    parser.add_argument(
+        "--ema-alpha",
+        type=float,
+        default=0.2,
+        help="EMA smoothing factor for wrist residuals (0-1).",
+    )
     args = parser.parse_args()
 
     xml_path = Path(args.scene).expanduser().resolve()
@@ -89,6 +95,7 @@ def main() -> None:
     last_log_time = time.time()
     latest_residual = None
     latest_euler_residual = None
+    smoothed_residual = None
 
     with viewer.launch_passive(model, data) as vis:
         while vis.is_running():
@@ -125,7 +132,16 @@ def main() -> None:
                         )
                         if base_xmat is not None:
                             residual = base_xmat @ residual
-                        target_position = initial_site_pos + args.position_scale * residual
+                        if smoothed_residual is None:
+                            smoothed_residual = residual
+                        else:
+                            smoothed_residual = (
+                                args.ema_alpha * residual
+                                + (1.0 - args.ema_alpha) * smoothed_residual
+                            )
+                        target_position = (
+                            initial_site_pos + args.position_scale * smoothed_residual
+                        )
 
                         relative_quaternion = quaternion_multiply(
                             robot_quaternion,
@@ -137,7 +153,7 @@ def main() -> None:
                             relative_quaternion[2],
                             relative_quaternion[3],
                         )
-                        latest_residual = residual
+                        latest_residual = smoothed_residual
                         latest_euler_residual = euler_residual
 
             now = time.time()
